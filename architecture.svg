@@ -1,0 +1,234 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1740" viewBox="0 0 2000 1740" role="img" aria-labelledby="title description">
+  <title id="title">Qwen on Azure Local: developer-to-model architecture</title>
+  <desc id="description">A developer runs a Python chat client, kubectl port-forward, and an Azure Arc proxy in VS Code. The active inference tunnel crosses Azure Arc Cluster Connect to the on-premises Kubernetes API server, worker kubelet, and Qwen pod. Service port 5000 selects pod port 8443, where NGINX fronts the ONNX GenAI inference container. Istio and Envoy form a separate installed gateway route, bypassed by this port-forward demo. Model catalog, operator, model store, telemetry, certificate management, Azure Local, and the physical appliance are also shown.</desc>
+  <defs>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #25364a; }
+      .title { font-size: 34px; font-weight: 650; }
+      .subtitle { font-size: 19px; fill: #58677a; }
+      .heading { font-size: 24px; font-weight: 600; }
+      .label { font-size: 19px; font-weight: 600; }
+      .body { font-size: 17px; }
+      .small { font-size: 15px; fill: #58677a; }
+      .tiny { font-size: 14px; fill: #58677a; }
+      .code { font-family: Consolas, monospace; font-size: 15px; }
+      .outer { fill: #fff; stroke: #1d72b8; stroke-width: 1.5; }
+      .card { fill: #fff; stroke: #9eb4c9; stroke-width: 1.2; }
+      .active { fill: none; stroke: #db762d; stroke-width: 3; marker-end: url(#orange); }
+      .control { fill: none; stroke: #2b77b5; stroke-width: 2; stroke-dasharray: 7 5; marker-end: url(#blue); }
+      .artifact { fill: none; stroke: #24854b; stroke-width: 2.5; stroke-dasharray: 8 5; marker-end: url(#green); }
+      .gateway { fill: none; stroke: #8755ac; stroke-width: 2.5; stroke-dasharray: 8 5; marker-end: url(#purple); }
+      .badge { fill: #db762d; }
+      .number { fill: #fff; font-size: 17px; font-weight: 700; text-anchor: middle; }
+    </style>
+    <marker id="orange" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" fill="#db762d"/></marker>
+    <marker id="blue" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" fill="#2b77b5"/></marker>
+    <marker id="green" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" fill="#24854b"/></marker>
+    <marker id="purple" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" fill="#8755ac"/></marker>
+    <symbol id="laptop" viewBox="0 0 64 48">
+      <rect x="9" y="2" width="46" height="33" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/>
+      <path d="M4 39 H60 L55 45 H9 Z" fill="none" stroke="currentColor" stroke-width="2.5"/>
+    </symbol>
+    <symbol id="rack" viewBox="0 0 38 58">
+      <rect x="2" y="1" width="34" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M5 18 H33 M5 36 H33 M10 10 H24 M10 27 H24 M10 45 H24" stroke="currentColor" stroke-width="2"/>
+      <circle cx="29" cy="10" r="2" fill="#24854b"/><circle cx="29" cy="27" r="2" fill="#24854b"/><circle cx="29" cy="45" r="2" fill="#24854b"/>
+    </symbol>
+  </defs>
+  <rect width="2000" height="1740" fill="#fff"/>
+  <text x="40" y="53" class="title">Qwen on Azure Local</text>
+  <text x="40" y="88" class="subtitle">Developer workstation to on-appliance inference | AKS Arc + Foundry Local | eng-22325</text>
+
+  <!-- Three external zones: developer, Azure connectivity, and artifact sources. -->
+  <rect x="40" y="125" width="600" height="415" class="outer"/>
+  <rect x="55" y="140" width="330" height="38" fill="#fce4d6"/>
+  <use href="#laptop" x="555" y="143" width="62" height="46" color="#3c5266"/>
+  <text x="68" y="167" class="heading">Local developer computer</text>
+  <text x="60" y="201" class="small">Windows / VS Code / three PowerShell terminals</text>
+  <rect x="60" y="220" width="235" height="142" class="card"/>
+  <text x="76" y="247" class="label">Terminal 3: Python chat</text>
+  <text x="76" y="274" class="code">chat.py --insecure</text>
+  <text x="76" y="302" class="body">History + api-key header</text>
+  <text x="76" y="328" class="small">POST /v1/chat/completions</text>
+  <text x="76" y="349" class="small">https://localhost:5000</text>
+  <rect x="335" y="220" width="285" height="142" class="card"/>
+  <text x="350" y="247" class="label">Terminal 2: port-forward</text>
+  <text x="350" y="274" class="code">kubectl port-forward</text>
+  <text x="350" y="301" class="code">svc/qwen2-5-0-5b-cpu</text>
+  <text x="350" y="328" class="code">5000:5000</text>
+  <text x="350" y="349" class="small">Local listener + tunneled stream</text>
+  <rect x="240" y="420" width="380" height="94" class="card"/>
+  <text x="255" y="448" class="label">Terminal 1: Azure Arc local proxy</text>
+  <text x="255" y="475" class="code">az connectedk8s proxy</text>
+  <text x="255" y="500" class="small">kubeconfig endpoint: localhost:47011*</text>
+  <path d="M295 286 H335" class="active"/>
+  <circle cx="315" cy="260" r="15" class="badge"/><text x="315" y="266" class="number">1</text>
+  <path d="M475 362 V420" class="active"/>
+  <circle cx="500" cy="390" r="15" class="badge"/><text x="500" y="396" class="number">2</text>
+  <text x="60" y="393" class="small">kubectl also reads the API-key Secret</text>
+  <text x="60" y="413" class="small">and resolved model ID using this proxy.</text>
+  <text x="60" y="528" class="tiny">*Port observed in this lab session.</text>
+
+  <rect x="680" y="125" width="600" height="415" class="outer"/>
+  <rect x="695" y="140" width="310" height="38" fill="#fce4d6"/>
+  <text x="708" y="167" class="heading">Microsoft Azure services</text>
+  <rect x="700" y="220" width="245" height="111" class="card"/>
+  <text x="716" y="248" class="label">Microsoft Entra ID</text>
+  <text x="716" y="276" class="body">Developer sign-in</text>
+  <text x="716" y="301" class="small">Identity for cluster access</text>
+  <rect x="965" y="220" width="295" height="111" class="card"/>
+  <text x="980" y="248" class="label">Azure Resource Manager</text>
+  <text x="980" y="276" class="body">Arc cluster registration</text>
+  <text x="980" y="301" class="small">Foundry + certificate extensions</text>
+  <rect x="700" y="380" width="560" height="134" class="card"/>
+  <text x="720" y="409" class="label">Azure Arc Cluster Connect</text>
+  <text x="720" y="438" class="body">Connectivity service / secure reverse-proxy session</text>
+  <text x="720" y="465" class="small">Carries Kubernetes API and port-forward traffic</text>
+  <text x="720" y="490" class="small">Connectivity only: no Qwen inference runs here</text>
+  <path d="M620 467 H700" class="active"/>
+  <circle cx="659" cy="444" r="15" class="badge"/><text x="659" y="450" class="number">3</text>
+  <path d="M823 331 V380" class="control"/>
+  <path d="M1110 331 V380" class="control"/>
+  <text x="60" y="579" class="body" fill="#a55320">Orange = actual demo request path. Responses return over the same tunnel.</text>
+
+  <rect x="1320" y="125" width="640" height="415" class="outer"/>
+  <rect x="1335" y="140" width="400" height="38" fill="#fce4d6"/>
+  <text x="1348" y="167" class="heading">Catalog and artifact sources</text>
+  <rect x="1340" y="220" width="600" height="134" class="card"/>
+  <text x="1357" y="248" class="label">Foundry model catalog / Azure ML registry assets</text>
+  <text x="1357" y="277" class="body">Selected: Qwen2.5-0.5B-Instruct, CPU, version 4</text>
+  <text x="1357" y="305" class="code">qwen2.5-0.5b-instruct-generic-cpu:4</text>
+  <text x="1357" y="331" class="small">Other catalog choices: Qwen 1.5B, Phi, Mistral, ...</text>
+  <rect x="1340" y="380" width="600" height="134" class="card"/>
+  <text x="1357" y="409" class="label">Model assets + container registries</text>
+  <text x="1357" y="438" class="body">Model downloads, MCR runtime images, Istio images</text>
+  <text x="1357" y="465" class="small">Outbound access through the lab's egress setup</text>
+  <text x="1357" y="490" class="small">Provisioning / caching, not a cloud chat-completion API</text>
+
+  <!-- Appliance, platform, and Kubernetes are nested, not Azure-hosted AKS. -->
+  <rect x="40" y="625" width="1920" height="920" rx="8" fill="#fafbfc" stroke="#60788f" stroke-width="2.5"/>
+  <use href="#rack" x="60" y="638" width="29" height="44" color="#52677b"/>
+  <text x="105" y="666" class="heading">Physical on-premises hardware appliance / server infrastructure</text>
+  <text x="1200" y="664" class="small">Hardware boundary is conceptual; vendor / host count not inventoried.</text>
+  <rect x="60" y="690" width="1880" height="835" rx="5" fill="#f1f7fc" stroke="#4c91c5" stroke-width="1.5"/>
+  <text x="82" y="721" class="heading">Azure Local</text>
+  <text x="260" y="720" class="body">Virtualization, compute, networking and storage for the on-premises AKS Arc cluster</text>
+  <rect x="80" y="745" width="1840" height="760" rx="4" fill="#fff" stroke="#1d72b8" stroke-width="1.5"/>
+  <text x="100" y="777" class="heading">AKS enabled by Azure Arc: zines-22325-aks</text>
+  <text x="1000" y="776" class="small">Control-plane node + worker node(s) run on Azure Local, not Azure-hosted AKS.</text>
+
+  <rect x="110" y="810" width="400" height="150" class="card"/>
+  <text x="128" y="837" class="small">Namespace: azure-arc</text>
+  <text x="128" y="866" class="label">clusterconnect-agent pod</text>
+  <text x="128" y="893" class="body">Outbound-established Arc tunnel</text>
+  <text x="128" y="923" class="label">kube-aad-proxy pod</text>
+  <text x="128" y="945" class="small">Entra authentication / impersonation</text>
+  <path d="M980 514 V596 H50 V790 H310 V810" class="active"/>
+  <circle cx="341" cy="792" r="15" class="badge"/><text x="341" y="798" class="number">4</text>
+  <text x="1000" y="584" class="small">Cluster agent initiates outbound connectivity; no public cluster API endpoint is required.</text>
+  <rect x="550" y="810" width="380" height="150" class="card"/>
+  <text x="568" y="837" class="small">Control-plane node / kube-system</text>
+  <text x="568" y="869" class="label">Kubernetes API server</text>
+  <text x="568" y="898" class="body">RBAC + port-forward subresource</text>
+  <text x="568" y="928" class="small">Also: etcd, scheduler, controllers</text>
+  <path d="M510 892 H550" class="active"/>
+  <circle cx="530" cy="866" r="15" class="badge"/><text x="530" y="872" class="number">5</text>
+  <rect x="970" y="810" width="320" height="150" class="card"/>
+  <text x="987" y="837" class="small">Worker node</text>
+  <text x="987" y="869" class="label">kubelet / container runtime</text>
+  <text x="987" y="898" class="body">Port-forward stream</text>
+  <text x="987" y="928" class="small">Reaches selected pod's port 8443</text>
+  <path d="M930 892 H970" class="active"/>
+  <circle cx="950" cy="866" r="15" class="badge"/><text x="950" y="872" class="number">6</text>
+
+  <rect x="1370" y="810" width="510" height="350" rx="4" fill="#fffaf5" stroke="#db762d" stroke-width="2"/>
+  <text x="1388" y="837" class="small">Namespace: foundry-local-operator</text>
+  <text x="1388" y="865" class="label">Dedicated Qwen model-serving pod</text>
+  <text x="1388" y="890" class="code">qwen2-5-0-5b-cpu-&lt;replica suffix&gt;</text>
+  <rect x="1390" y="911" width="470" height="66" class="card"/>
+  <text x="1406" y="938" class="label">nginx-sidecar: HTTPS / TLS :8443</text>
+  <text x="1406" y="962" class="small">Front end for this pod's model endpoint</text>
+  <rect x="1390" y="1010" width="470" height="101" class="card"/>
+  <text x="1406" y="1037" class="label">inference container: :5000</text>
+  <text x="1406" y="1065" class="body">Foundry Local runtime / ONNX Runtime GenAI</text>
+  <text x="1406" y="1093" class="body">Qwen2.5-0.5B weights + CPU execution</text>
+  <text x="1388" y="1143" class="small">Init: model-store-pull | Native sidecar: otel-sidecar</text>
+  <path d="M1290 892 H1330 V944 H1390" class="active"/>
+  <circle cx="1330" cy="865" r="15" class="badge"/><text x="1330" y="871" class="number">7</text>
+  <path d="M1625 977 V1010" class="active"/>
+  <circle cx="1656" cy="994" r="15" class="badge"/><text x="1656" y="1000" class="number">8</text>
+
+  <rect x="970" y="1020" width="320" height="140" class="card"/>
+  <text x="987" y="1046" class="small">foundry-local-operator / Service</text>
+  <text x="987" y="1073" class="code">qwen2-5-0-5b-cpu</text>
+  <text x="987" y="1102" class="label">5000 -&gt; targetPort 8443</text>
+  <text x="987" y="1132" class="small">Selects the Qwen pod; ClusterIP</text>
+  <path d="M1290 1090 H1330 V956 H1390" class="control"/>
+  <text x="1370" y="1190" class="small">Port-forward uses the Service to select a pod and port;</text>
+  <text x="1370" y="1213" class="small">its data stream does not traverse the Service ClusterIP.</text>
+
+  <rect x="110" y="1020" width="400" height="225" fill="#fcf9ff" stroke="#8755ac" stroke-width="1.3"/>
+  <text x="128" y="1047" class="label">Istio / Envoy gateway route</text>
+  <text x="128" y="1074" class="small">Installed, but bypassed by this demo</text>
+  <text x="128" y="1107" class="body">istiod pod (istio-system)</text>
+  <text x="128" y="1134" class="small">Gateway API configuration -&gt; proxy config</text>
+  <text x="128" y="1168" class="body">inference-internal-gateway-istio pod</text>
+  <text x="128" y="1195" class="small">Envoy / istio-proxy, gateway HTTPS :443</text>
+  <text x="128" y="1223" class="small">Gateway pod is in foundry-local-operator</text>
+  <path d="M308 1139 V1151" class="control"/>
+  <path d="M510 1183 H528 V1273 H1130 V1160" class="gateway"/>
+  <text x="600" y="1261" class="small">HTTPRoute /qwen2-5-0-5b-cpu -&gt; model Service</text>
+
+  <rect x="550" y="1020" width="380" height="225" class="card"/>
+  <text x="568" y="1047" class="label">Certificate and trust controllers</text>
+  <text x="568" y="1075" class="body">cert-manager + trust-manager</text>
+  <text x="568" y="1103" class="small">Installed through Arc CertManagement</text>
+  <text x="568" y="1131" class="body">Certificates / TLS Secrets / CA trust</text>
+  <text x="568" y="1167" class="small">Gateway API CRDs, HTTPRoute,</text>
+  <text x="568" y="1192" class="small">ModelDeployment, StoreModel:</text>
+  <text x="568" y="1220" class="small">configuration objects, NOT running pods</text>
+
+  <text x="110" y="1310" class="body">Foundry Local supporting components | namespace: foundry-local-operator</text>
+  <rect x="110" y="1330" width="365" height="150" class="card"/>
+  <text x="127" y="1357" class="label">Local catalog ConfigMap</text>
+  <text x="127" y="1385" class="code">foundry-local-catalog</text>
+  <text x="127" y="1412" class="small">binaryData.catalog.json.gz</text>
+  <text x="127" y="1438" class="small">Choose assetId + CPU variant/version</text>
+  <text x="127" y="1464" class="small">catalog-sync-seed: setup job*</text>
+  <rect x="505" y="1330" width="365" height="150" class="card"/>
+  <text x="522" y="1357" class="label">inference-operator pod</text>
+  <text x="522" y="1385" class="body">Reconciles ModelDeployment</text>
+  <text x="522" y="1412" class="small">Creates serving pod, Service, routes,</text>
+  <text x="522" y="1438" class="small">API-key Secret and certificate resources</text>
+  <text x="522" y="1464" class="small">operator + nginx + native OTel sidecar</text>
+  <rect x="900" y="1330" width="450" height="150" class="card"/>
+  <text x="917" y="1357" class="label">inference-operator-model-store pod</text>
+  <text x="917" y="1385" class="body">Local model artifact registry / cache</text>
+  <text x="917" y="1412" class="small">registry + model-store-auth + nginx</text>
+  <text x="917" y="1438" class="small">Cache/download jobs; read/write probe jobs*</text>
+  <text x="917" y="1464" class="small">Model pod's init container pulls model assets</text>
+  <rect x="1380" y="1330" width="500" height="150" class="card"/>
+  <text x="1397" y="1357" class="label">telemetry-collector pod + Arc agents</text>
+  <text x="1397" y="1385" class="body">OTel collector + msi-adapter + mdsd + mdm</text>
+  <text x="1397" y="1412" class="small">Operational metrics/logs; not model execution</text>
+  <text x="1397" y="1438" class="small">azure-arc: extension-manager, config-agent,</text>
+  <text x="1397" y="1464" class="small">resource-sync, identity and telemetry agents</text>
+  <path d="M1940 468 H1980 V1294 H1125 V1330" class="artifact"/>
+  <text x="1500" y="1281" class="small">Provisioning: download / cache assets</text>
+  <path d="M1350 1390 H1362 V1230 H1900 V1140 H1880" class="artifact"/>
+  <text x="1390" y="1255" class="small">Load cached model at pod startup</text>
+  <path d="M475 1405 H505" class="control"/>
+  <path d="M870 1405 H900" class="control"/>
+  <path d="M688 1330 V1290 H1348 V790 H1625 V810" class="control"/>
+
+  <!-- Legend and scope notes mirror the reference's boxed, color-coded layout. -->
+  <rect x="40" y="1580" width="1920" height="80" class="outer"/>
+  <text x="60" y="1611" class="heading">Legend</text>
+  <path d="M190 1606 H250" class="active"/><text x="267" y="1612" class="body">Active inference tunnel</text>
+  <path d="M620 1606 H680" class="control"/><text x="697" y="1612" class="body">Configuration / selection</text>
+  <path d="M1110 1606 H1170" class="artifact"/><text x="1187" y="1612" class="body">Model provisioning</text>
+  <path d="M1510 1606 H1570" class="gateway"/><text x="1587" y="1612" class="body">Alternate gateway route</text>
+  <text x="190" y="1642" class="small">Model compute stays on Azure Local. This Arc-based client path still uses Azure connectivity for the transport.</text>
+  <text x="40" y="1691" class="small">Verified: live pod/container inventory, Service targetPort, HTTPRoute, and ModelDeployment. Supporting installation details: lab + supplied transcript.</text>
+  <text x="40" y="1717" class="small">*Completed setup/probe jobs need not remain present. Resource names omit replica suffixes where appropriate. No external load balancer is required for this demo.</text>
+</svg>

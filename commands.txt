@@ -1,0 +1,95 @@
+ kubectl get modeldeployment qwen2-5-0-5b-cpu -n foundry-local-operator -w
+
+
+
+
+
+generate API keys and store them securely: ------
+
+$secretName = 'qwen2-5-0-5b-cpu-api-keys'
+
+while ($true) {
+    $secret = kubectl get secret $secretName `
+        -n foundry-local-operator --ignore-not-found -o name
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to check API key Secret."
+    }
+
+    if ($secret) { break }
+
+    Write-Host "Waiting for $secretName ..."
+    Start-Sleep 10
+}
+
+$encodedKey = kubectl get secret $secretName `
+    -n foundry-local-operator -o jsonpath='{.data.primary-key}'
+
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($encodedKey)) {
+    throw "Failed to retrieve the primary API key."
+}
+
+$API_KEY = [System.Text.Encoding]::UTF8.GetString(
+    [System.Convert]::FromBase64String($encodedKey)
+)
+
+# Check the prefix without displaying the secret.
+$API_KEY.StartsWith('fndry-pk-')
+
+
+
+-------------------------------------------------------------------------
+
+
+
+ready the model to start responding: -------------------------------------
+
+kubectl port-forward svc/qwen2-5-0-5b-cpu -n foundry-local-operator 5000:5000
+# Leave this running. Ctrl+C stops it when you're done.
+
+
+-- now run the inference ---
+& {
+    $ErrorActionPreference = 'Stop'
+
+    $encodedKey = kubectl get secret qwen2-5-0-5b-cpu-api-keys `
+        -n foundry-local-operator -o jsonpath='{.data.primary-key}'
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($encodedKey)) {
+        throw "Failed to retrieve the API key. Check the Arc proxy."
+    }
+
+    $API_KEY = [Text.Encoding]::UTF8.GetString(
+        [Convert]::FromBase64String($encodedKey)
+    )
+
+    $MODEL_ID = kubectl get modeldeployment qwen2-5-0-5b-cpu `
+        -n foundry-local-operator `
+        -o jsonpath='{.status.resolvedModel.name}'
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($MODEL_ID)) {
+        throw "Failed to retrieve the resolved model name."
+    }
+
+    $body = @{
+        model = $MODEL_ID
+        messages = @(
+            @{ role = "system"; content = "You are a helpful assistant." }
+            @{ role = "user"; content = "What is the capital of France? Reply in one sentence." }
+        )
+        max_tokens = 50
+    } | ConvertTo-Json -Depth 3 -Compress
+
+    $result = $body | curl.exe --silent --show-error --fail --insecure `
+        "https://localhost:5000/v1/chat/completions" `
+        --header "Content-Type: application/json" `
+        --header "api-key: $API_KEY" `
+        --data-binary '@-'
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inference request failed. Check the port-forward and model status."
+    }
+
+    $resp = $result | ConvertFrom-Json
+    $resp.choices[0].message.content
+}

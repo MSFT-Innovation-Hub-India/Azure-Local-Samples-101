@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "contoso-field-service",
+  "name": "Contoso Field Service",
+  "description": "Explore Contoso industrial warranty coverage, regional differences for India, EMEA and APAC, exclusions, repair warranty, and goodwill approval limits using the indexed policy, regional addenda and authority matrix. Assessments are advisory and cite retrieved PDF evidence.",
+  "example_questions": [
+    "According to the India addendum, how many months is the warranty coverage period?",
+    "According to the India addendum, what is the running-hours limit?",
+    "According to the APAC addendum, how many months is the standard coverage period?",
+    "According to the global policy, how many days does repair warranty last?",
+    "According to the goodwill matrix, what is the Tier 1 INR approval limit?",
+    "According to the goodwill matrix, which role holds Tier 2 approval authority?"
+  ]
+}

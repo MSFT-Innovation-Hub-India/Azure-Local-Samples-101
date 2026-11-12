@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "retail",
+  "name": "Retail returns",
+  "description": "Synthetic return windows, receipt requirements and exception approvals.",
+  "example_questions": [
+    "What is the approval code?",
+    "How long is the return window?"
+  ]
+}

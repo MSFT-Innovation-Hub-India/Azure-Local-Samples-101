@@ -1,0 +1,1 @@
+"""Local PDF retrieval assistant."""

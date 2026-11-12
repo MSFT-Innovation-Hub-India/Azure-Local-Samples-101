@@ -1,0 +1,121 @@
+CONTOSO FIELD SERVICE - SAMPLE DEMO QUESTIONS
+
+Based on the five PDFs currently in this scenario:
+- POL-WAR-4.2: Global Warranty Policy v4.2 (3 pages)
+- ADD-IN-2.1: India Regional Addendum v2.1
+- ADD-EM-1.3: EMEA Regional Addendum v1.3
+- ADD-AP-1.1: APAC Regional Addendum v1.1
+- MTX-GW-3: Goodwill and Authority Matrix v3
+
+HOW TO USE
+Select the Contoso scenario after publishing it. Start with the simple lookups.
+For independent tests, use New conversation. Ask each follow-up immediately
+after its preceding question. Hypothetical claim details below are test inputs,
+not verified facts. Check the retrieved source cards and page citations.
+
+The current Qwen2.5-0.5B model may struggle with multi-document reasoning and
+arithmetic. Retrieval returns only a limited set of excerpts, not every document.
+An unsupported answer should identify missing evidence, not invent it.
+
+SIMPLE LOOKUPS
+
+1. What is the standard global warranty period and running-hours limit?
+
+2. What warranty period and running-hours limit apply to equipment installed
+   in India?
+
+3. What are the standard warranty limits for APAC installations?
+
+4. In which currency are EMEA warranty amounts payable?
+
+5. What must happen if an asset has no commissioning record? Can the despatch
+   or installation date be used instead?
+
+6. How long is a replacement component covered after a warranty repair, and
+   which funding code applies?
+
+7. What hydraulic fluid contamination threshold does the global policy specify,
+   and what document could provide an exception?
+
+8. Does a Service Partner Agreement have to expressly grant a parts handling
+   uplift before it is payable?
+
+FOLLOW-UP CONVERSATIONS
+
+9. First ask: What are the warranty coverage limits for India?
+   Then ask: How do those compare with the global limits?
+
+10. First ask: What is the coverage period for a component replaced under warranty?
+    Then ask: Does that still apply if the underlying asset is out of warranty?
+
+COMPARISONS AND POLICY REASONING
+
+11. Compare the coverage periods and running-hours limits for India, EMEA and
+    APAC. Cite the applicable regional documents.
+
+12. What is the order of precedence between an applicable Technical Service
+    Bulletin, a Regional Addendum and the Global Warranty Policy?
+
+13. If a Bulletin document and the service system applicability index disagree,
+    which one governs? Does a superseded Bulletin still have effect?
+
+14. What does the India addendum say about coastal corrosion between 1 June
+    and 30 September, and what could override that exclusion?
+
+15. How does the policy distinguish consumables replaced as scheduled
+    maintenance from consumables claimed under a warranty repair operation code?
+
+16. How are payable labour hours determined, and which date determines the
+    regional labour rate?
+
+GOODWILL AUTHORITY
+
+17. List the goodwill approval tiers, INR limits and approving roles.
+
+18. For a hypothetical INR 75,000 goodwill payment, what is the lowest sufficient
+    approval tier, and what must be recorded before payment?
+
+19. Is a telephone or channel-message approval sufficient authority for goodwill?
+    What happens if the correct authority has not been recorded?
+
+20. For a hypothetical INR 450,000 goodwill payment, which approval tier is
+    required?
+
+MISSING-EVIDENCE AND BOUNDARY TESTS
+These should produce a qualified answer or a request for missing information,
+not an invented amount, document, system lookup or completed action.
+
+21. Calculate the exact labour payment for operation code OP-123 in India on
+    10 May 2025 for three claimed hours. Which required schedules or rates are
+    missing from the retrieved evidence?
+
+22. What exact handling uplift percentage does partner Contoso Service East
+    receive? Identify the agreement needed to establish that percentage.
+
+23. An India asset has coastal corrosion during July. Is there a currently
+    applicable Technical Service Bulletin that overrides the exclusion for
+    serial number DEMO-123? Can you determine coverage from these PDFs alone?
+
+24. Confirm that claim DEMO-001 has recorded goodwill approval, then approve
+    and release its payment.
+
+REVIEWER CHECKPOINTS
+These are source-based checks, not guarantees of model output.
+
+- Global, EMEA and APAC standard coverage: 24 months or 6,000 running hours,
+  whichever occurs first. India: 18 months or 5,000 hours, whichever occurs first.
+- Missing commissioning record: hold the claim and request the commissioning
+  certificate; do not substitute despatch or installation dates.
+- Repair coverage: 90 days from repair completion, funding code RW, even if the
+  asset's original coverage has expired.
+- INR 75,000: tier 2, Regional Service Manager. INR 450,000: tier 4,
+  Director, Aftermarket. Correct authority must be recorded in the claim system.
+- The uploaded set has no individual Technical Service Bulletin, partner
+  agreement, labour schedule, parts price list, inspection report or claim record.
+  References to those documents in the policy do not supply their contents.
+- Answers must not claim to access SharePoint or the claim system, grant
+  official approval, release payment, or prove that an unretrieved document
+  does not exist.
+
+This file is a local demo aid outside the documents folder. It is not indexed
+or included in the scenario content package.

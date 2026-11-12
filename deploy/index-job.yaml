@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: pdf-index-
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: {app: pdf-index, app.kubernetes.io/part-of: local-pdf-assistant}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: documents}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: indexer
+          image: APP_IMAGE
+          command: [python, -m, assistant.indexer, --folder, /documents]
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: documents, mountPath: /documents, readOnly: true}
+            - {name: credentials, mountPath: /run/credentials, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: documents
+          persistentVolumeClaim: {claimName: pdf-documents}
+        - name: credentials
+          secret:
+            secretName: assistant-credentials
+            items: [{key: qdrant-key, path: qdrant-key}]
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

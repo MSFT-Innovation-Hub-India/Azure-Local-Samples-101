@@ -1,0 +1,247 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: assistant-demo
+  labels:
+    app.kubernetes.io/part-of: local-pdf-assistant
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pdf-documents
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: default
+  resources:
+    requests: {storage: 2Gi}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-data
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: default
+  resources:
+    requests: {storage: 5Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: assistant-web
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  selector: {app: assistant-web}
+  ports: [{name: http, port: 80, targetPort: 8000}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embeddings
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  selector: {app: embeddings}
+  ports: [{name: http, port: 8001, targetPort: 8001}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  selector: {app: qdrant}
+  ports: [{name: http, port: 6333, targetPort: 6333}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assistant-web
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: assistant-web}
+  template:
+    metadata:
+      labels: {app: assistant-web, app.kubernetes.io/part-of: local-pdf-assistant}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: app
+          image: APP_IMAGE
+          ports: [{containerPort: 8000}]
+          env:
+            - name: MODEL_ID
+              valueFrom: {configMapKeyRef: {name: assistant-settings, key: model-id}}
+            - name: MODEL_URL
+              valueFrom: {configMapKeyRef: {name: assistant-settings, key: model-url}}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {cpu: 500m, memory: 384Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          readinessProbe: {httpGet: {path: /healthz, port: 8000}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: 8000}, initialDelaySeconds: 20, periodSeconds: 20}
+          volumeMounts:
+            - {name: credentials, mountPath: /run/credentials, readOnly: true}
+            - {name: trust, mountPath: /run/trust, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: credentials
+          secret: {secretName: assistant-credentials}
+        - name: trust
+          configMap: {name: model-trust}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embeddings
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: embeddings}
+  template:
+    metadata:
+      labels: {app: embeddings, app.kubernetes.io/part-of: local-pdf-assistant}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: embeddings
+          image: EMBEDDINGS_IMAGE
+          ports: [{containerPort: 8001}]
+          resources:
+            requests: {cpu: 300m, memory: 1Gi}
+            limits: {cpu: "2", memory: 1Gi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          startupProbe: {httpGet: {path: /healthz, port: 8001}, failureThreshold: 60, periodSeconds: 5}
+          readinessProbe: {httpGet: {path: /healthz, port: 8001}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: 8001}, periodSeconds: 20}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels: {app: qdrant}
+  template:
+    metadata:
+      labels: {app: qdrant, app.kubernetes.io/part-of: local-pdf-assistant}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: qdrant
+          image: QDRANT_IMAGE
+          ports: [{containerPort: 6333}]
+          env:
+            - name: QDRANT__SERVICE__API_KEY
+              valueFrom: {secretKeyRef: {name: assistant-credentials, key: qdrant-key}}
+            - {name: QDRANT__TELEMETRY_DISABLED, value: "true"}
+            - {name: QDRANT__STORAGE__SNAPSHOTS_PATH, value: /qdrant/storage/snapshots}
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          readinessProbe: {httpGet: {path: /readyz, port: 6333}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: 6333}, initialDelaySeconds: 30, periodSeconds: 20}
+          volumeMounts:
+            - {name: data, mountPath: /qdrant/storage}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: qdrant-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: documents
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: documents}
+  template:
+    metadata:
+      labels: {app: documents, app.kubernetes.io/part-of: local-pdf-assistant}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: documents
+          image: APP_IMAGE
+          command: [python, -c, "import time; time.sleep(2147483647)"]
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: documents, mountPath: /documents}
+      volumes:
+        - name: documents
+          persistentVolumeClaim: {claimName: pdf-documents}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: assistant-private-network
+  namespace: assistant-demo
+  labels: {app.kubernetes.io/part-of: local-pdf-assistant}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 8000}
+        - {protocol: TCP, port: 8001}
+        - {protocol: TCP, port: 6333}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 8001}
+        - {protocol: TCP, port: 6333}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: foundry-local-operator}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: qwen2-5-0-5b-cpu}
+      ports:
+        - {protocol: TCP, port: 5000}
+        - {protocol: TCP, port: 8443}

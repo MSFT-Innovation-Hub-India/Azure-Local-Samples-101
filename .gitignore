@@ -1,0 +1,15 @@
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+node_modules/
+frontend/dist/
+.env
+.env.*
+!.env.example
+.cache/
+.local/
+*.pdf
+*.zip
+scenarios/*/documents/**
+!scenarios/*/documents/.gitkeep

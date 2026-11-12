@@ -1,0 +1,15 @@
+*
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!requirements.lock.txt
+!assistant/
+assistant/*
+!assistant/*.py
+!frontend/
+frontend/*
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/index.html
+!frontend/src/
+!frontend/src/*

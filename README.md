@@ -4,6 +4,154 @@ The Python client uses only the standard library; no packages or virtual
 environment are required. Python 3.9 or newer and `kubectl` must be on PATH.
 The client uses your current kubectl context.
 
+## PDF assistant application
+
+### Domain scenario packages
+
+Add a domain by supplying only its `scenario.json`, `system-prompt.md`, and PDF
+documents. The shared RAG engine supports isolated indexes, prompts and history,
+with a **Use case scenario** selector in the React UI. Content-only releases are
+packaged and indexed on Azure Local without rebuilding images or replacing other
+scenarios.
+
+See [scenario authoring, packaging and publication](./docs/SCENARIOS.md) for the
+workflow and included operations, manufacturing and retail examples. The
+[core runbook](./docs/ASSISTANT.md) also explains how the original deployment was
+created, what failed, and how it was validated.
+
+The new React/FastAPI PDF assistant, local embedding service, Qdrant integration,
+indexing pipeline, tests, and additive Kubernetes templates are documented in the
+[assistant runbook](./docs/ASSISTANT.md). Container builds use **`az acr build`**,
+not local Docker.
+
+**Deployed on Azure Local:** the app, embeddings, Qdrant and document helper run
+in `assistant-demo` on the added worker, with two Bound PVCs. The synthetic PDF
+was indexed in-cluster, and the browser returned the correct recovery code with
+a source passage. Images were built remotely in the explicitly approved external
+ACR; lab-subscription ACR creation was blocked by RBAC/provider registration.
+
+With the Arc proxy active, open the deployed UI through:
+
+```powershell
+kubectl --context zines-22325-aks port-forward -n assistant-demo svc/assistant-web --address 127.0.0.1 8080:80
+```
+
+Browse to `http://localhost:8080`. Pull credentials currently use an expiring
+Entra token (about three hours); refresh them before later image pulls. The
+runbook documents sign-in isolation, in-memory credential refresh, CoreDNS
+configuration, indexing and the dedicated pull identity needed for production.
+
+Each answer displays input, output and total tokens reported by the model.
+Input includes instructions, history and retrieved excerpts, not just your
+question. Missing counts and responses requiring no model call are labeled
+explicitly. These counts exclude embedding tokens and do not prove accuracy.
+
+### Onboard a new scenario
+
+The UI currently selects published scenarios; it does not provide a document
+upload or scenario-creation screen. Use the publishing tool below to add one.
+
+**Prerequisites:** run these commands from this project directory with the
+assistant's existing `.venv` and dependencies installed (see the
+[assistant setup](./docs/ASSISTANT.md)). Unlike the standard-library chat client,
+the scenario tool requires those dependencies. You also need `kubectl` access to
+the deployed assistant. Keep the [Arc proxy](#prerequisite-start-the-arc-proxy)
+running in a separate terminal. Refresh expired image-pull credentials using the
+[runbook](./docs/ASSISTANT.md) before publishing; the indexing Job needs to pull
+the deployed application image.
+
+#### 1. Create the scenario
+
+Creation and packaging are local operations: Kubernetes connectivity is only
+needed for Step 3 (upload and index). Create the folder first, add your documents
+and edit the prompt, then package it.
+
+The first argument is a stable **scenario ID**, not the display name. Use a
+lowercase slug of at most 40 characters, starting with a letter, with letters,
+digits and single hyphens between segments; spaces and uppercase letters are
+invalid. `--name` is the human-readable display name and may contain spaces.
+For example:
+
+```powershell
+.\.venv\Scripts\python.exe -m tools.scenario new contoso-field-service `
+    --name "Contoso Field Service"
+```
+
+For the facilities example used throughout the remaining steps:
+
+```powershell
+.\.venv\Scripts\python.exe -m tools.scenario new facilities `
+    --name "Facilities support"
+if ($LASTEXITCODE -ne 0) { throw "Scenario creation failed." }
+```
+
+This generates:
+
+```text
+scenarios\facilities\
+  scenario.json       Name, description and example questions
+  system-prompt.md    Domain-specific instructions
+  documents\          PDFs to index
+```
+
+Edit the generated definition to set the description and example questions.
+Keep its stable `id` as `facilities`. Edit
+the generated domain prompt, then copy your relevant PDFs into the generated
+documents folder; nested folders are supported.
+
+Word documents must first be exported to PDF, and scanned PDFs need OCR.
+Provide at least one text PDF. Each package supports up to 200 PDFs, 25 MiB and
+200 pages per PDF, and 48 MiB total compressed and expanded content. Do not commit
+private documents or confidential prompt/definition content.
+
+#### 2. Package the definition, prompt and documents
+
+```powershell
+$release = .\.venv\Scripts\python.exe -m tools.scenario package `
+    .\scenarios\facilities | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw "Scenario packaging failed." }
+$release.package
+```
+
+This creates a ZIP in the ignored local package directory. It is a content
+release, not a container image; PDFs are not included in an ACR build.
+
+#### 3. Upload and index in the existing cluster
+
+```powershell
+.\.venv\Scripts\python.exe -m tools.scenario deploy $release.package `
+    --context zines-22325-aks --timeout 900
+if ($LASTEXITCODE -ne 0) { throw "Scenario publication failed." }
+```
+
+The tool checks ownership, storage and capacity, uploads the package, and waits
+for an indexing Job in `assistant-demo`. Parsing and embedding run on Azure Local.
+The scenario ID automatically ties together its documents, isolated vector index,
+system prompt and UI metadata. No manual database wiring, core image rebuild or
+model redeployment is needed.
+
+The upload travels through the connected Arc proxy; this is not a disconnected
+or wholly on-premises transfer path. If publication fails, inspect the reported
+error and follow the [recovery guide](./docs/SCENARIOS.md) before retrying.
+Failed indexing preserves the previous searchable scenario.
+
+#### 4. Select and test
+
+Open `http://localhost:8080` using the application port-forward above. Click
+**Refresh scenarios**, select **Facilities support** under **Use case scenario**,
+and ask a question whose answer appears in your PDFs. Check the source passages.
+Switching scenarios clears the displayed conversation.
+
+**Update later:** edit the same scenario folder, then repeat packaging and
+publication. Reusing the ID updates that scenario; a new ID adds another.
+Each package is the complete document set, not an incremental upload: include
+all PDFs you want searchable. Omitted documents leave that scenario's active
+index after successful publication. Other scenarios remain unchanged.
+
+All users who can reach this demo can select all published scenarios; the
+selector is not an authorization boundary. See the
+[full scenario guide](./docs/SCENARIOS.md) for validation limits and safe recovery.
+
 ## Architecture
 
 ![Qwen on Azure Local architecture](./architecture.svg)

@@ -1,0 +1,26 @@
+apiVersion: foundrylocal.azure.com/v1
+kind: ModelDeployment
+metadata:
+  name: qwen2-5-14b-cpu
+  namespace: foundry-local-operator
+  labels:
+    app.kubernetes.io/part-of: local-pdf-assistant
+spec:
+  displayName: Qwen2.5-14B-Instruct CPU
+  model:
+    assetId: azureml://registries/azureml/models/qwen2.5-14b-instruct-generic-cpu/versions/4
+  workloadType: generative
+  compute: cpu
+  runtime: onnx-genai
+  replicas: 1
+  nodeSelector:
+    kubernetes.azure.com/agentpool: slmnodepool
+  endpoint:
+    exposure: internal
+  resources:
+    requests:
+      cpu: "8"
+      memory: 16Gi
+    limits:
+      cpu: "16"
+      memory: 32Gi

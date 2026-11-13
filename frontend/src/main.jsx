@@ -22,6 +22,8 @@ function App() {
   const [status, setStatus] = useState(null);
   const [scenarios, setScenarios] = useState([]);
   const [selected, setSelected] = useState("operations");
+  const [models, setModels] = useState([]);
+  const [model, setModel] = useState(null);
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,13 +34,17 @@ function App() {
   async function refresh() {
     setBusy(true);
     try {
-      const [catalog, next] = await Promise.all([
+      const [catalog, next, available] = await Promise.all([
         request("/api/scenarios"),
         request(`/api/status?scenario=${encodeURIComponent(selected)}`),
+        request("/api/models"),
       ]);
       if (revision.current && revision.current !== next.scenario.revision) setMessages([]);
       revision.current = next.scenario.revision;
       setScenarios(catalog.scenarios);
+      setModels(available.models);
+      setModel((current) => available.models.some((item) => item.id === current)
+        ? current : available.default_model);
       setStatus(next);
       setError("");
     } catch (failure) {
@@ -62,13 +68,13 @@ function App() {
       const answer = await request("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": status.csrf_token },
-        body: JSON.stringify({ question: text, scenario: selected }),
+        body: JSON.stringify({ question: text, scenario: selected, ...(model ? { model } : {}) }),
       });
       const turns = [
         { role: "user", content: text },
         {
           role: "assistant", content: answer.answer, sources: answer.sources,
-          usage: answer.usage, modelCalled: answer.model_called,
+          usage: answer.usage, modelCalled: answer.model_called, model: answer.model,
         },
       ];
       const sameRevision = revision.current === answer.revision;
@@ -90,6 +96,24 @@ function App() {
         method: "POST", headers: { "X-CSRF-Token": status.csrf_token },
       });
       setMessages([]);
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function switchModel(id) {
+    if (busy || id === model) return;
+    setBusy(true);
+    setError("");
+    try {
+      await request(`/api/reset?scenario=${encodeURIComponent(selected)}`, {
+        method: "POST", headers: { "X-CSRF-Token": status.csrf_token },
+      });
+      setModel(id);
+      setMessages([]);
+      setQuestion("");
     } catch (failure) {
       setError(failure.message);
     } finally {
@@ -130,7 +154,7 @@ function App() {
       </section>
       <button className="secondary" onClick={refresh} disabled={busy}>Refresh index status</button>
       <div className="architecture">
-        <p>React + FastAPI</p><p>Local embeddings + Qdrant</p><p>Foundry Local + Qwen</p>
+        <p>React + FastAPI</p><p>Local embeddings + Qdrant</p><p>Foundry Local + selectable Qwen models</p>
       </div>
       <p className="footnote">Demo access uses the Azure Arc tunnel. This is not a disconnected deployment.</p>
     </aside>
@@ -138,6 +162,12 @@ function App() {
       <header>
         <div><h2>PDF Assistant</h2><p>{status?.scenario.name || "Grounded answers, with source passages"}</p></div>
         <div className="header-actions">
+          {models.length > 1 && <label className="scenario-picker" htmlFor="model">Model
+            <select id="model" value={model || ""} disabled={busy || !status}
+              onChange={(event) => switchModel(event.target.value)}>
+              {models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>}
           <label className="scenario-picker" htmlFor="scenario">Use case scenario
             <select id="scenario" value={selected} disabled={busy || !scenarios.length}
               onChange={(event) => switchScenario(event.target.value)}>
@@ -157,10 +187,12 @@ function App() {
             {(status?.scenario.example_questions || []).map((text) =>
               <button key={text} onClick={() => setQuestion(text)}>{text}</button>)}
           </div>
-          <p className="footnote">The small Qwen model can make mistakes. Check the sources before relying on an answer.</p>
+          <p className="footnote">{models.find((item) => item.id === model)?.description
+            ? `${models.find((item) => item.id === model).description} `
+            : ""}Small local models can make mistakes. Check the sources before relying on an answer.</p>
         </section>}
         {messages.map((message, index) => <article key={index} className={`message ${message.role}`}>
-          <span className="role">{message.role === "user" ? "YOU" : "ASSISTANT"}</span>
+          <span className="role">{message.role === "user" ? "YOU" : "ASSISTANT"}{message.model && message.modelCalled !== false ? ` · ${message.model.label}` : ""}</span>
           <div className="answer">{message.content}</div>
           {message.role === "assistant" && <p className="token-usage">
             {message.modelCalled === false

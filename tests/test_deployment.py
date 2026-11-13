@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools.deploy_assistant import Kubectl, MIB, choose_node, ensure_owned, manifest_resources, pod_request, prepare, quantity, registry_config
+from tools.deploy_assistant import Kubectl, MIB, choose_node, ensure_owned, existing_placements, manifest_resources, model_catalog, pod_request, prepare, quantity, registry_config
 
 
 def node(memory="16242728Ki", taints=None):
@@ -56,6 +56,56 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(spec["dnsConfig"]["nameservers"], ["10.96.214.2"])
             self.assertEqual(spec["dnsConfig"]["searches"][0], "assistant-demo.svc.cluster.local")
         kubectl.get.assert_any_call("service", "kube-dns-upstream", "kube-system")
+
+    def test_model_catalog_lists_every_deployment_with_default_first(self):
+        deployed = {
+            "qwen-small": {"status": {"resolvedModel": {"name": "small-id", "alias": "qwen-small", "fileSizeBytes": 2 * 1024 ** 3}}},
+            "qwen-large": {"status": {"resolvedModel": {"name": "large-id", "alias": "qwen-large"}}},
+        }
+        catalog = model_catalog(["qwen-small", "qwen-large"], "foundry", deployed)["models"]
+        self.assertEqual([entry["id"] for entry in catalog], ["qwen-small", "qwen-large"])
+        self.assertEqual(catalog[0]["url"], "https://qwen-small.foundry.svc.cluster.local:5000/v1/chat/completions")
+        self.assertEqual(catalog[0]["description"], "CPU/ONNX model, 2.0 GiB.")
+        self.assertEqual(catalog[1]["key_file"], "/run/credentials/model-key-qwen-large")
+
+    def test_network_policy_allows_every_selected_model_only(self):
+        image = "demo.azurecr.io/app@sha256:" + "1" * 64
+        args = SimpleNamespace(
+            storage_class="default", dns_service="dns", app_image=image, embeddings_image=image,
+            qdrant_image=image, registry_config=None, registry_config_stdin=False,
+            model_namespace="foundry", model_deployment=["qwen-small", "qwen-large"],
+        )
+        policy = {"kind": "NetworkPolicy", "metadata": {"name": "p"}, "spec": {"egress": [{"to": [{
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "x"}},
+            "podSelector": {"matchExpressions": [{"key": "app.kubernetes.io/name", "operator": "In", "values": ["x"]}]},
+        }]}]}}
+        kubectl = Mock()
+        kubectl.get.side_effect = [
+            None, {"items": []}, {"items": []},
+            {"provisioner": "azlocal.csi.azure.com"}, {"spec": {"clusterIP": "10.96.214.2"}},
+        ] + [None] * 20
+        kubectl.run.return_value = json.dumps(policy)
+        with patch("tools.deploy_assistant.choose_node", return_value=("worker", "capacity passed")):
+            prepared, _ = prepare(args, kubectl)
+        selector = prepared[0]["spec"]["egress"][-1]["to"][0]
+        self.assertEqual(selector["podSelector"]["matchExpressions"][0]["values"], ["qwen-small", "qwen-large"])
+        self.assertEqual(selector["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"], "foundry")
+
+    def test_preserve_placement_pins_live_nodes_and_refuses_request_changes(self):
+        def workload(memory, host=None):
+            spec = {"containers": [{"resources": {"requests": {"memory": memory, "cpu": "100m"}}}]}
+            if host:
+                spec["nodeSelector"] = {"kubernetes.io/hostname": host}
+            return {"kind": "Deployment", "metadata": {"name": "web"}, "spec": {"template": {"spec": spec}}}
+
+        kubectl = Mock()
+        kubectl.get.return_value = workload("384Mi", "systempool-node")
+        self.assertEqual(existing_placements(kubectl, [workload("384Mi")]), {"web": "systempool-node"})
+        with self.assertRaisesRegex(RuntimeError, "memory request"):
+            existing_placements(kubectl, [workload("512Mi")])
+        kubectl.get.return_value = None
+        with self.assertRaisesRegex(RuntimeError, "deployed already"):
+            existing_placements(kubectl, [workload("384Mi")])
 
     def test_manifest_output_accepts_kubectl_json_stream_and_list(self):
         resources = [{"kind": "Namespace"}, {"kind": "Deployment"}]

@@ -41,6 +41,13 @@ Entra token (about three hours); refresh them before later image pulls. The
 runbook documents sign-in isolation, in-memory credential refresh, CoreDNS
 configuration, indexing and the dedicated pull identity needed for production.
 
+The header has a **Model** drop-down (shown when more than one model is
+configured) next to the scenario picker. Choosing a model starts a fresh
+conversation, each answer names the model that produced it, and the same
+retrieved sources are used for either choice, so you can compare models on one
+scenario. The port-forward must be running for the browser to reach the app;
+stop it with Ctrl+C when finished.
+
 Each answer displays input, output and total tokens reported by the model.
 Input includes instructions, history and retrieved excerpts, not just your
 question. Missing counts and responses requiring no model call are labeled

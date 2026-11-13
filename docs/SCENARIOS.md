@@ -278,8 +278,9 @@ The small Qwen model and character-based prompt budget need domain evaluation.
 
 ```text
 GET  /api/scenarios
+GET  /api/models           -> {"models":[{"id","label","description"}], "default_model":"..."}
 GET  /api/status?scenario=retail
-POST /api/chat             {"scenario":"retail","question":"..."}
+POST /api/chat             {"scenario":"retail","question":"...","model":"<id, optional>"}
 POST /api/reset?scenario=retail
 ```
 

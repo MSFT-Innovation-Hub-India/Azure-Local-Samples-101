@@ -1,0 +1,21 @@
+# Record of the lab-provisioned deployment (applied during the lab walkthrough).
+# It mirrors the live spec; re-applying is a no-op. Do not change it to resize the model.
+apiVersion: foundrylocal.azure.com/v1
+kind: ModelDeployment
+metadata:
+  name: qwen2-5-0-5b-cpu
+  namespace: foundry-local-operator
+spec:
+  compute: cpu
+  model:
+    assetId: azureml://registries/azureml/models/qwen2.5-0.5b-instruct-generic-cpu/versions/4
+  replicas: 1
+  resources:
+    limits:
+      cpu: "4"
+      memory: 10Gi
+    requests:
+      cpu: "2"
+      memory: 6Gi
+  runtime: onnx-genai
+  workloadType: generative

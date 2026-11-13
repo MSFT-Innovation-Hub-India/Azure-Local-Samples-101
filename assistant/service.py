@@ -3,12 +3,12 @@ import re
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from time import monotonic
-from typing import Protocol
+from typing import Protocol, Sequence
 
 from qdrant_client import QdrantClient
 
 from assistant.clients import CompletionResult, DependencyError, Embedder
-from assistant.config import EMBEDDING_MODEL, EMBEDDING_REVISION
+from assistant.config import EMBEDDING_MODEL, EMBEDDING_REVISION, ModelOption
 from assistant.scenarios import DEFAULT_SCENARIO, get_scenario
 
 
@@ -27,7 +27,11 @@ SYSTEM = (
 
 
 class CompletionModel(Protocol):
-    def complete(self, messages: list[dict[str, str]]) -> CompletionResult: ...
+    def complete(self, messages: list[dict[str, str]], model: str | None = None) -> CompletionResult: ...
+
+
+class UnknownModel(LookupError):
+    """The requested model is not in the configured catalog."""
 
 
 @dataclass
@@ -37,12 +41,26 @@ class Session:
 
 
 class AssistantService:
-    def __init__(self, database: QdrantClient, embedder: Embedder, model: CompletionModel):
+    def __init__(
+        self, database: QdrantClient, embedder: Embedder, model: CompletionModel,
+        models: Sequence[ModelOption] = (),
+    ):
         self.database = database
         self.embedder = embedder
         self.model = model
-        self.sessions: OrderedDict[tuple[str, str, str], Session] = OrderedDict()
+        self.models = list(models)
+        self.sessions: OrderedDict[tuple[str, str, str, str], Session] = OrderedDict()
         self.lock = threading.Lock()
+
+    def resolve_model(self, model: str | None) -> ModelOption | None:
+        if not self.models:
+            return None
+        if model is None:
+            return self.models[0]
+        for option in self.models:
+            if option.id == model:
+                return option
+        raise UnknownModel(f"Unknown model: {model}")
 
     def reset(self, session_id: str, scenario_id: str = DEFAULT_SCENARIO) -> None:
         with self.lock:
@@ -50,7 +68,12 @@ class AssistantService:
                 if key[:2] == (session_id, scenario_id):
                     del self.sessions[key]
 
-    def answer(self, session_id: str, question: str, scenario_id: str = DEFAULT_SCENARIO) -> dict:
+    def answer(
+        self, session_id: str, question: str, scenario_id: str = DEFAULT_SCENARIO,
+        model: str | None = None,
+    ) -> dict:
+        selected = self.resolve_model(model)
+        model_id = selected.id if selected else None
         # One CPU model and one demo replica: bound concurrent generation rather than queue forever.
         if not self.lock.acquire(blocking=False):
             raise DependencyError("The assistant is busy. Retry when the current request finishes.")
@@ -60,7 +83,7 @@ class AssistantService:
             collection = scenario.collection
             if not collection:
                 raise DependencyError("No PDF index is available. Run the indexing Job first.")
-            session_key = (session_id, scenario.id, scenario.revision)
+            session_key = (session_id, scenario.id, scenario.revision, model_id or "")
             for key in list(self.sessions):
                 if now - self.sessions[key].touched > 3600:
                     del self.sessions[key]
@@ -107,7 +130,7 @@ class AssistantService:
                     "role": "user",
                     "content": f"PDF excerpts:\n{'\n\n'.join(passages)}\n\nQuestion: {question}",
                 })
-                completion = self.model.complete(messages)
+                completion = self.model.complete(messages, model_id)
                 answer = completion.content
                 usage = asdict(completion.usage) if completion.usage is not None else None
             session.messages = (history + [
@@ -122,6 +145,7 @@ class AssistantService:
             return {
                 "answer": answer, "sources": sources, "scenario": scenario.id,
                 "revision": scenario.revision, "model_called": bool(sources), "usage": usage,
+                "model": selected.public() if selected else None,
             }
         finally:
             self.lock.release()

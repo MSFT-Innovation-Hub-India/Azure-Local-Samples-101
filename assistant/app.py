@@ -11,10 +11,10 @@ from pydantic import BaseModel, Field
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from assistant.clients import (
-    DependencyError, EmbeddingClient, ModelClient, model_http_client, qdrant_client,
+    DependencyError, EmbeddingClient, build_model_router, model_http_client, qdrant_client,
 )
-from assistant.config import Settings, read_secret
-from assistant.service import AssistantService
+from assistant.config import MODEL_ID_PATTERN, Settings, load_models
+from assistant.service import AssistantService, UnknownModel
 from assistant.scenarios import DEFAULT_SCENARIO, SLUG_PATTERN, ScenarioError, UnknownScenario, get_scenario, list_scenarios
 
 
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     scenario: str = Field(default=DEFAULT_SCENARIO, pattern=SLUG_PATTERN, max_length=40)
+    model: str | None = Field(default=None, pattern=MODEL_ID_PATTERN.pattern, max_length=60)
 
 
 def create_app(settings: Settings | None = None, service: AssistantService | None = None) -> FastAPI:
@@ -40,9 +41,10 @@ def create_app(settings: Settings | None = None, service: AssistantService | Non
                     base_url=settings.embedding_url, timeout=120, trust_env=False,
                 ))
                 model_http = stack.enter_context(model_http_client(settings))
+                options = load_models(settings)
                 app.state.service = AssistantService(
                     database, EmbeddingClient(embedding_http),
-                    ModelClient(model_http, settings, read_secret(settings.model_key_file)),
+                    build_model_router(model_http, settings, options), options,
                 )
             yield
 
@@ -100,6 +102,19 @@ def create_app(settings: Settings | None = None, service: AssistantService | Non
         logger.error("Scenario configuration failed: %s", exc)
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    @app.exception_handler(UnknownModel)
+    async def unknown_model(request: Request, exc: UnknownModel):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.get("/api/models")
+    def models() -> dict:
+        available = app.state.service.models
+        return {
+            "models": [option.public() for option in available],
+            "default_model": available[0].id if available else None,
+        }
+
     @app.get("/api/scenarios")
     def scenarios() -> dict:
         try:
@@ -132,7 +147,7 @@ def create_app(settings: Settings | None = None, service: AssistantService | Non
             raise HTTPException(422, "Question must not be blank.")
         identity = session_id(request, response)
         try:
-            return app.state.service.answer(identity, question, body.scenario)
+            return app.state.service.answer(identity, question, body.scenario, body.model)
         except DependencyError as exc:
             logger.warning("Assistant dependency failed: %s", exc)
             raise HTTPException(503, str(exc)) from exc

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,9 +11,11 @@ from reportlab.pdfgen import canvas
 
 from assistant.app import create_app
 from assistant.clients import (
-    CompletionResult, DependencyError, EmbeddingClient, ModelClient, TokenUsage, validate_vectors,
+    CompletionResult, DependencyError, EmbeddingClient, ModelClient, ModelRouter, TokenUsage, validate_vectors,
 )
-from assistant.config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, EMBEDDING_REVISION, Settings
+from assistant.config import (
+    EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, EMBEDDING_REVISION, ModelOption, Settings, load_models,
+)
 from assistant.indexer import active_collection, index_folder, read_corpus
 from assistant.service import AssistantService, NO_EVIDENCE
 
@@ -255,7 +258,80 @@ class AppTests(unittest.TestCase):
             self.service.lock.release()
 
 
+class ModelSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        folder = Path(self.temp.name)
+        write_pdf(folder / "operations.pdf", ["The service recovery code is mango."])
+        self.database = QdrantClient(":memory:")
+        self.addCleanup(self.database.close)
+        index_folder(folder, self.database, FakeEmbedder())
+        self.model = Mock()
+        self.model.complete.return_value = CompletionResult("The code is mango. [1]")
+        options = [
+            ModelOption("small", "Small", "Fast.", "https://secret-url", "s", "/secret/key"),
+            ModelOption("large", "Large", "Better."),
+        ]
+        service = AssistantService(self.database, FakeEmbedder(), self.model, options)
+        self.client = TestClient(create_app(Settings(static_dir=str(folder / "absent")), service))
+        self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
+        self.token = self.client.get("/api/status").json()["csrf_token"]
+
+    def chat(self, **body):
+        return self.client.post(
+            "/api/chat", json={"question": "What is the recovery code?", **body},
+            headers={"X-CSRF-Token": self.token},
+        )
+
+    def test_models_endpoint_hides_backend_details(self):
+        payload = self.client.get("/api/models").json()
+        self.assertEqual(payload["default_model"], "small")
+        self.assertEqual(payload["models"][1], {"id": "large", "label": "Large", "description": "Better."})
+        self.assertNotIn("secret", str(payload))
+
+    def test_chat_uses_default_then_selected_model(self):
+        first = self.chat()
+        self.assertEqual(self.model.complete.call_args.args[1], "small")
+        self.assertEqual(first.json()["model"]["label"], "Small")
+        second = self.chat(model="large")
+        self.assertEqual(self.model.complete.call_args.args[1], "large")
+        self.assertEqual(second.json()["model"]["id"], "large")
+
+    def test_history_is_not_shared_between_models(self):
+        self.chat(model="small")
+        self.chat(model="large")
+        self.assertEqual(len(self.model.complete.call_args.args[0]), 2)
+
+    def test_unknown_or_malformed_model_is_rejected(self):
+        self.assertEqual(self.chat(model="missing").status_code, 404)
+        self.assertEqual(self.chat(model="../etc").status_code, 422)
+        self.model.complete.assert_not_called()
+
+
 class ClientTests(unittest.TestCase):
+    def test_router_dispatches_to_the_selected_model_and_rejects_unknown(self):
+        small, large = Mock(), Mock()
+        small.complete.return_value = CompletionResult("small")
+        large.complete.return_value = CompletionResult("large")
+        router = ModelRouter({"small": small, "large": large})
+        self.assertEqual(router.complete([]).content, "small")
+        self.assertEqual(router.complete([], "large").content, "large")
+        with self.assertRaises(DependencyError):
+            router.complete([], "missing")
+
+    def test_model_catalog_loading_and_validation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "models.json"
+            self.assertEqual(load_models(Settings(models_file=str(path)))[0].id, "default")
+            entry = {"id": "a", "label": "A", "url": "https://a", "model_id": "m", "key_file": "/k"}
+            path.write_text(json.dumps({"models": [entry, {**entry, "id": "b"}]}))
+            self.assertEqual([m.id for m in load_models(Settings(models_file=str(path)))], ["a", "b"])
+            for invalid in ({"models": []}, {"models": [entry, entry]}, {"models": [{**entry, "id": "Bad Id"}]}, {"x": 1}):
+                path.write_text(json.dumps(invalid))
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    load_models(Settings(models_file=str(path)))
     def test_embedding_payload_and_revision_are_validated(self):
         response = {
             "model": EMBEDDING_MODEL, "revision": EMBEDDING_REVISION,
@@ -276,7 +352,7 @@ class ClientTests(unittest.TestCase):
             "assistant.app.qdrant_client", return_value=database,
         ), patch(
             "assistant.app.model_http_client", return_value=httpx.Client(),
-        ), patch("assistant.app.read_secret", return_value="test-key"):
+        ), patch("assistant.clients.read_secret", return_value="test-key"):
             with TestClient(create_app(Settings(static_dir="absent"))) as browser:
                 self.assertEqual(browser.get("/healthz").status_code, 200)
                 self.assertFalse(browser.get("/api/status").json()["indexed"])

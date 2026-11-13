@@ -156,10 +156,39 @@ def manifest_resources(output: str) -> list[dict]:
     return resources
 
 
+def existing_placements(kubectl: Kubectl, stack: list[dict]) -> dict[str, str]:
+    """Pin each workload to the node it already runs on, only if its requests are unchanged."""
+    placements = {}
+    for resource in stack:
+        if resource["kind"] not in {"Deployment", "StatefulSet"}:
+            continue
+        name = resource["metadata"]["name"]
+        live = kubectl.get(resource["kind"].lower(), name, NAMESPACE)
+        hostname = (live or {}).get("spec", {}).get("template", {}).get("spec", {}).get(
+            "nodeSelector", {},
+        ).get("kubernetes.io/hostname")
+        if not hostname:
+            raise RuntimeError(
+                f"--preserve-placement needs {resource['kind']}/{name} to be deployed already; "
+                "run the capacity guard without it."
+            )
+        for request in ("memory", "cpu"):
+            if pod_request(live["spec"]["template"], request) != pod_request(resource["spec"]["template"], request):
+                raise RuntimeError(
+                    f"{name} changes its {request} request; --preserve-placement would bypass the capacity guard."
+                )
+        placements[name] = hostname
+    return placements
+
+
 def prepare(args, kubectl: Kubectl) -> tuple[list[dict], str]:
     namespace = kubectl.get("namespace", NAMESPACE)
     ensure_owned(namespace, "namespace", NAMESPACE)
-    node, report = choose_node(kubectl.get("nodes")["items"], kubectl.get("pods", namespace=None)["items"])
+    preserve = getattr(args, "preserve_placement", False)
+    if preserve:
+        node, report = None, "Preserving the existing workload placement; resource requests must be unchanged."
+    else:
+        node, report = choose_node(kubectl.get("nodes")["items"], kubectl.get("pods", namespace=None)["items"])
     print(report)
     storage = kubectl.get("storageclass", args.storage_class)
     if storage is None:
@@ -193,12 +222,13 @@ def prepare(args, kubectl: Kubectl) -> tuple[list[dict], str]:
         "create", "--dry-run=client", "--validate=false",
         "-f", str(ROOT / "deploy" / "stack.yaml"), "-o", "json",
     ))
+    placements = existing_placements(kubectl, stack) if preserve else {}
     for resource in stack:
         if resource["kind"] == "PersistentVolumeClaim":
             resource["spec"]["storageClassName"] = args.storage_class
         if resource["kind"] in {"Deployment", "StatefulSet"}:
             spec = resource["spec"]["template"]["spec"]
-            spec["nodeSelector"] = {"kubernetes.io/hostname": node}
+            spec["nodeSelector"] = {"kubernetes.io/hostname": placements.get(resource["metadata"]["name"], node)}
             spec["dnsPolicy"] = "None"
             spec["dnsConfig"] = {
                 "nameservers": [dns_ip],
@@ -215,13 +245,14 @@ def prepare(args, kubectl: Kubectl) -> tuple[list[dict], str]:
         if resource["kind"] == "NetworkPolicy":
             destination = resource["spec"]["egress"][-1]["to"][0]
             destination["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] = args.model_namespace
-            destination["podSelector"]["matchLabels"]["app.kubernetes.io/name"] = args.model_deployment
+            destination["podSelector"]["matchExpressions"][0]["values"] = list(args.model_deployment)
     extras = [
         {
             "apiVersion": "v1", "kind": "ConfigMap",
             "metadata": metadata("assistant-settings"),
             "data": {"model-id": ""},
         },
+        {"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata("assistant-models"), "data": {}},
         {"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata("model-trust"), "data": {}},
         {"apiVersion": "v1", "kind": "Secret", "metadata": metadata("assistant-credentials"), "data": {}},
     ]
@@ -239,13 +270,36 @@ def prepare(args, kubectl: Kubectl) -> tuple[list[dict], str]:
     return stack + extras, node
 
 
+def model_catalog(deployments: list[str], namespace: str, models: dict[str, dict]) -> dict:
+    """Selectable-model catalog; the first deployment is the assistant's default model."""
+    entries = []
+    for name in deployments:
+        resolved = models[name]["status"]["resolvedModel"]
+        size = resolved.get("fileSizeBytes")
+        entries.append({
+            "id": name,
+            "label": resolved.get("alias") or resolved["name"],
+            "description": f"CPU/ONNX model, {size / 1024 ** 3:.1f} GiB." if size else "CPU/ONNX model.",
+            "url": f"https://{name}.{namespace}.svc.cluster.local:5000/v1/chat/completions",
+            "model_id": resolved["name"],
+            "key_file": f"/run/credentials/model-key-{name}",
+        })
+    return {"models": entries}
+
+
 def apply(args, kubectl: Kubectl, resources: list[dict]) -> None:
-    model = kubectl.get("modeldeployment", args.model_deployment, args.model_namespace)
-    model_id = model["status"]["resolvedModel"]["name"]
-    source_key = kubectl.get("secret", f"{args.model_deployment}-api-keys", args.model_namespace)
-    encoded_key = source_key["data"]["primary-key"]
-    if not base64.b64decode(encoded_key, validate=True).strip():
-        raise RuntimeError("The existing model API key is empty.")
+    deployments = list(args.model_deployment)
+    models = {name: kubectl.get("modeldeployment", name, args.model_namespace) for name in deployments}
+    if not all(models.values()):
+        raise RuntimeError("Every selected model deployment must exist and be ready first.")
+    keys = {}
+    for name in deployments:
+        source_key = kubectl.get("secret", f"{name}-api-keys", args.model_namespace)
+        keys[name] = source_key["data"]["primary-key"]
+        if not base64.b64decode(keys[name], validate=True).strip():
+            raise RuntimeError(f"The existing API key for {name} is empty.")
+    catalog = model_catalog(deployments, args.model_namespace, models)
+    default = catalog["models"][0]
     ca = kubectl.get("configmap", args.model_ca_configmap, args.model_namespace)["data"]["ca.crt"]
     if "-----BEGIN CERTIFICATE-----" not in ca:
         raise RuntimeError("The model CA bundle is invalid.")
@@ -254,17 +308,16 @@ def apply(args, kubectl: Kubectl, resources: list[dict]) -> None:
     for resource in resources:
         name = resource["metadata"]["name"]
         if name == "assistant-settings":
-            resource["data"] = {
-                "model-id": model_id,
-                "model-url": (
-                    f"https://{args.model_deployment}.{args.model_namespace}."
-                    "svc.cluster.local:5000/v1/chat/completions"
-                ),
-            }
+            resource["data"] = {"model-id": default["model_id"], "model-url": default["url"]}
+        elif name == "assistant-models":
+            resource["data"] = {"models.json": json.dumps(catalog, indent=2)}
         elif name == "model-trust":
             resource["data"] = {"ca.crt": ca}
         elif name == "assistant-credentials":
-            resource["data"] = {"model-key": encoded_key, "qdrant-key": database_key}
+            resource["data"] = {
+                "model-key": keys[deployments[0]], "qdrant-key": database_key,
+                **{f"model-key-{model}": key for model, key in keys.items()},
+            }
     # No resource-group, infrastructure, extension, or existing model writes occur here.
     for resource in resources:
         if resource["kind"] == "Namespace":
@@ -288,7 +341,10 @@ def main() -> int:
     parser.add_argument("--storage-class", default="default")
     parser.add_argument("--dns-service", default="kube-dns-upstream", help="CoreDNS Service in kube-system, bypassing host-network NodeLocal DNS.")
     parser.add_argument("--model-namespace", default="foundry-local-operator")
-    parser.add_argument("--model-deployment", default="qwen2-5-0-5b-cpu")
+    parser.add_argument(
+        "--model-deployment", action="append",
+        help="Foundry ModelDeployment to offer; repeat for several (the first is the default). Default: qwen2-5-0-5b-cpu.",
+    )
     parser.add_argument("--model-ca-configmap", default="foundry-local-operator-ca-bundle")
     parser.add_argument("--app-image")
     parser.add_argument("--embeddings-image")
@@ -296,12 +352,17 @@ def main() -> int:
     pull = parser.add_mutually_exclusive_group()
     pull.add_argument("--registry-config", help="Path to approved registry dockerconfigjson; never committed.")
     pull.add_argument("--registry-config-stdin", action="store_true", help="Read registry dockerconfigjson from stdin without a temporary credential file.")
+    parser.add_argument(
+        "--preserve-placement", action="store_true",
+        help="Upgrade in place: keep every workload on its current node. Refused if any CPU/memory request changes.",
+    )
     parser.add_argument("--apply", action="store_true", help="Permit writes only after read-only preflight passes.")
     args = parser.parse_args()
+    args.model_deployment = list(dict.fromkeys(args.model_deployment or ["qwen2-5-0-5b-cpu"]))
     kubectl = Kubectl(args.context)
     try:
         resources, node = prepare(args, kubectl)
-        print(f"Preflight passed for worker {node}. Review lab-owner capacity approval before --apply.")
+        print(f"Preflight passed ({'existing placement' if node is None else 'worker ' + node}). Review lab-owner capacity approval before --apply.")
         if args.apply:
             apply(args, kubectl, resources)
         else:

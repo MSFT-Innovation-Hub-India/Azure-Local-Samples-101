@@ -95,12 +95,15 @@ spec:
           volumeMounts:
             - {name: credentials, mountPath: /run/credentials, readOnly: true}
             - {name: trust, mountPath: /run/trust, readOnly: true}
+            - {name: models, mountPath: /run/models, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: credentials
           secret: {secretName: assistant-credentials}
         - name: trust
           configMap: {name: model-trust}
+        - name: models
+          configMap: {name: assistant-models}
         - name: tmp
           emptyDir: {sizeLimit: 64Mi}
 ---
@@ -241,7 +244,10 @@ spec:
         - namespaceSelector:
             matchLabels: {kubernetes.io/metadata.name: foundry-local-operator}
           podSelector:
-            matchLabels: {app.kubernetes.io/name: qwen2-5-0-5b-cpu}
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [qwen2-5-0-5b-cpu, qwen2-5-14b-cpu]
       ports:
         - {protocol: TCP, port: 5000}
         - {protocol: TCP, port: 8443}

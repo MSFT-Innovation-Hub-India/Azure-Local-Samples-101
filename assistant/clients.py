@@ -1,13 +1,13 @@
 import math
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import httpx
 from qdrant_client import QdrantClient
 
 from assistant.config import (
-    EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, EMBEDDING_REVISION, Settings, read_secret,
+    EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, EMBEDDING_REVISION, ModelOption, Settings, read_secret,
 )
 
 
@@ -113,6 +113,33 @@ class ModelClient:
             if counts.total_tokens != counts.prompt_tokens + counts.completion_tokens:
                 raise DependencyError("Local model returned inconsistent token usage.")
         return CompletionResult(content.strip(), counts)
+
+
+class ModelRouter:
+    """Sends a completion to the selected model's client; the first client is the default."""
+
+    def __init__(self, clients: dict[str, ModelClient]):
+        if not clients:
+            raise ValueError("At least one model is required.")
+        self.clients = clients
+        self.default = next(iter(clients))
+
+    def complete(self, messages: list[dict[str, str]], model: str | None = None) -> CompletionResult:
+        client = self.clients.get(model or self.default)
+        if client is None:
+            raise DependencyError("The selected model is not configured.")
+        return client.complete(messages)
+
+
+def build_model_router(
+    http: httpx.Client, settings: Settings, options: list[ModelOption],
+) -> ModelRouter:
+    return ModelRouter({
+        option.id: ModelClient(
+            http, replace(settings, model_url=option.url, model_id=option.model_id),
+            read_secret(option.key_file),
+        ) for option in options
+    })
 
 
 def qdrant_client(settings: Settings) -> QdrantClient:

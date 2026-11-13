@@ -455,6 +455,143 @@ Resolve and record base image digests, scan the final images, and verify model
 licenses before promoting a production release. The recipe's base tags are not
 an immutable software-supply-chain guarantee.
 
+### Layout of `deploy/`
+
+| File | What it is | State in the cluster |
+| --- | --- | --- |
+| `qwen2.5-0.5b.yaml` | Model `qwen2-5-0-5b-cpu` (lab-provisioned; record of the live spec) | Running; the assistant's current model |
+| `qwen2.5-14b.yaml` | Model `qwen2-5-14b-cpu`, pinned to `slmnodepool` | Running |
+| `gpt-oss-20b.yaml` | Model `gpt-oss-20b-cpu`, pinned to `slmnodepool` | Removed (too slow on CPU); manifest kept for a future GPU pool |
+| `stack.yaml`, `index-job.yaml` | Assistant application stack and indexing Job (`assistant-demo`) | Running; referenced by `tools/deploy_assistant.py` and the tests, so not renamed |
+
+Model manifests are named `<family>-<size>.yaml`, and each one's `metadata.name`
+is the ModelDeployment name used in its endpoint and API-key Secret.
+
+### Optional GPT-OSS CPU evaluation on a separate worker
+
+The lab owner added `slmnodepool` with one `Standard_D16s_v3` worker. Read-only
+checks confirmed it Ready, reporting 32 allocatable CPUs and about 62.7 GiB
+allocatable RAM, with 415m CPU and 219 MiB reserved by platform pods. These are
+the node-reported values, not the portal SKU's advertised CPU count. Existing
+Qwen and assistant workloads remained running.
+
+[`deploy/gpt-oss-20b.yaml`](../deploy/gpt-oss-20b.yaml) is a separate, pinned
+CPU/ONNX model definition targeting only this pool. Its initial evaluation
+reservation is 8 CPU / 24 GiB, with limits of 16 CPU / 48 GiB. Those are evaluation
+settings, not measured peak requirements or a throughput guarantee. Do not lower
+them to force scheduling. Verify current reservations and available disk capacity
+before applying; the catalog reports about 12.26 GiB of CPU model artifacts.
+The catalog's short license field says MIT while its description identifies
+Apache-2.0; review the actual asset license before production use.
+
+**Deployment boundary:** the installed operator runs with
+`--namespace=foundry-local-operator` and `ALLOWED_NAMESPACES=foundry-local-operator`.
+It will not reconcile a ModelDeployment in `assistant-demo`. The prepared
+manifest therefore names the operator's namespace and requires an authorized
+platform administrator; it is not part of the assistant-only guarded deployment.
+Do not change operator scope, weaken the assistant namespace's restricted Pod
+Security policy, or patch generated pods to work around that boundary.
+
+Creating this model must not replace the existing Qwen model or change the
+assistant's configured endpoint. After an administrator deploys it, verify
+model readiness, actual placement on `slmnodepool`, model-store free space, API
+key creation, TLS and real chat completions. Never print API keys. Benchmark
+generation with the same retrieved warranty evidence and check output/reasoning
+handling before any application switch. GPT-OSS may need more than the current
+256-token application output budget.
+
+For recovery, keep the current Qwen configuration and all document/Qdrant PVCs.
+An authorized administrator can remove only the newly created evaluation
+ModelDeployment if necessary; do not delete the namespace, shared model store,
+node pool or existing deployments.
+
+**Deployment result (lab owner authorized, `slmnodepool` re-provisioned):**
+`kubectl apply -f deploy/gpt-oss-20b.yaml` created `gpt-oss-20b-cpu`. The model
+artifact downloaded in about 10 minutes and the model loaded in about 5 more;
+the deployment reports `Running`/ready, with its pod placed on `slmnodepool`.
+Qwen (`qwen2-5-0-5b-cpu`) and all `assistant-demo` workloads stayed Running and
+untouched; the assistant still points at Qwen. The internal endpoint is
+`https://inference-internal-gateway-istio.foundry-local-operator.svc.cluster.local:443/gpt-oss-20b-cpu`
+and its keys are in Secret `gpt-oss-20b-cpu-api-keys` (never print them).
+
+**Measured limitation: not usable for interactive chat.** Authentication and
+routing work, and the model returns real tokens, but CPU generation is far too
+slow: about 30 tokens took 170-300 s, with negligible cgroup throttling. The
+operator's nginx sidecar returns 504 after 60 s, so non-streaming requests via
+the gateway time out. gpt-oss also emits an `analysis` reasoning channel before
+the answer, which consumes the output budget. Do not switch the assistant to it
+on this CPU pool. A GPU pool (the catalog has `gpt-oss-20b-cuda-gpu`; the cluster
+currently has no NVIDIA device plugin or `nvidia.com/gpu` resources) is the route
+for GPT-OSS; do not raise limits or edit the operator's sidecar to compensate.
+`gpt-oss-20b-cpu` was therefore removed (only that ModelDeployment) and replaced
+by the evaluation below.
+
+### Qwen2.5-14B CPU evaluation (alongside the existing 0.5B model)
+
+[`deploy/qwen2.5-14b.yaml`](../deploy/qwen2.5-14b.yaml) deploys
+`qwen2-5-14b-cpu` (catalog asset `qwen2.5-14b-instruct-generic-cpu` v4, about
+11.06 GiB) pinned to `slmnodepool`, reserving 8 CPU / 16 GiB with limits of
+16 CPU / 32 GiB. It was applied by the lab owner's authorization; the 0.5B
+`qwen2-5-0-5b-cpu` deployment and all `assistant-demo` workloads were left
+untouched at that point. The assistant now offers both models; see below.
+
+Measured on the 32-CPU D16s_v3 worker: the artifact downloaded in about 9
+minutes and the pod became ready about 2 minutes later. A short completion
+through the internal gateway returned HTTP 200 (84 completion tokens in about
+7.3 s, roughly 11 tokens/s) with a coherent answer; direct streaming measured
+about 6 tokens/s on a very short reply. These are single-request, unloaded
+numbers, not a capacity guarantee, and have not yet been run with the
+assistant's retrieved-evidence prompts. Qwen2.5-14B's endpoint is
+`https://inference-internal-gateway-istio.foundry-local-operator.svc.cluster.local:443/qwen2-5-14b-cpu`
+with keys in Secret `qwen2-5-14b-cpu-api-keys` (never print them). Evaluate
+answer quality and latency on the warranty scenario before switching the
+assistant's model endpoint.
+
+**Recovery:** an administrator can remove only the evaluation deployment
+(`kubectl delete modeldeployment qwen2-5-14b-cpu -n foundry-local-operator`) to
+free the node. Do not delete the namespace, model store, node pool or the 0.5B
+Qwen deployment. If you remove it, redeploy the assistant with only
+`--model-deployment qwen2-5-0-5b-cpu` (see below) so the drop-down no longer
+lists it.
+
+### Choosing between models in the assistant
+
+The assistant offers every model listed in the `assistant-models` ConfigMap
+(`models.json`, mounted at `/run/models`) in a **Model** drop-down. The first
+entry is the default (the 0.5B model). The backend sends the request to the
+selected model's own Service and API key; URLs and keys never reach the browser,
+and history is kept separately per model. Without that file the app falls back to
+its single legacy model settings, so older deployments keep working.
+
+Deployed with the guarded tool, repeating `--model-deployment` once per model
+(first = default). Use `--preserve-placement` for upgrades so that Qdrant, the
+document volume and the other workloads stay on their current node; it is
+refused if any CPU or memory request would change, so it cannot be used to
+bypass the capacity guard:
+
+```powershell
+$dockerJson | .\.venv\Scripts\python.exe -B -m tools.deploy_assistant `
+    --app-image $images.app_image --embeddings-image $images.embeddings_image `
+    --qdrant-image $images.qdrant_image --registry-config-stdin --preserve-placement `
+    --model-deployment qwen2-5-0-5b-cpu --model-deployment qwen2-5-14b-cpu --apply
+```
+
+This copies each selected model's API key into `assistant-credentials` as
+`model-key-<deployment>` (never printed), keeps `model-key` for the default, and
+widens the assistant's egress policy to exactly the listed model pods on ports
+5000/8443. Without `--preserve-placement` the tool re-runs the capacity guard,
+which may pick a different node; do not use that for an already-running
+assistant. As with any model key rotation, rerun this and restart only
+`deployment/assistant-web`.
+
+**Verified:** the same warranty question on the Contoso scenario returned HTTP
+200 from both models with identical retrieved sources. The 0.5B model answered in
+about 3.5 s with a terse single-region answer; the 14B model took about 28 s
+(about 1,000 prompt tokens, 95 output tokens) and gave a region-aware answer
+with citations. These are single, unloaded requests, not a benchmark. Unknown
+model ids return 404. The assistant processes one request at a time, so a slow
+14B answer blocks others (they receive an explicit "busy" error).
+
 ### Subsequent core upgrades: rebuild only the application
 
 Per-answer token usage display is a core API/UI change: use this app-only
